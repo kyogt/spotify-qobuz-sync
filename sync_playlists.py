@@ -11,7 +11,6 @@ import logging
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-import json
 
 # ログ設定
 logging.basicConfig(
@@ -60,20 +59,6 @@ def initialize_spotify():
         logger.error(f"Spotify APIの初期化に失敗しました: {e}")
         raise
 
-# プレイリストIDを取得する関数
-def get_playlist_id_by_name(sp, name):
-    try:
-        results = sp.current_user_playlists()
-        for playlist in results['items']:
-            if name in playlist['name']:
-                return playlist['id']
-        # フォローしているプレイリストも確認
-        # (注：この方法は有効でない場合があります。必要に応じて修正してください)
-        return None
-    except Exception as e:
-        logger.error(f"プレイリスト '{name}' のID取得に失敗しました: {e}")
-        return None
-
 # プレイリストのトラック情報を取得する関数
 def get_playlist_tracks(sp, playlist_id):
     try:
@@ -81,26 +66,38 @@ def get_playlist_tracks(sp, playlist_id):
         
         # 事前にプレイリストの存在を確認する
         try:
-            playlist_info = sp.playlist(playlist_id, fields="name")
-            logger.info(f"プレイリスト名: {playlist_info['name']}")
+            playlist_info = sp.playlist(playlist_id, fields="name,tracks.total")
+            logger.info(f"プレイリスト名: {playlist_info['name']}, 曲数: {playlist_info['tracks']['total']}")
         except Exception as e:
             logger.error(f"プレイリスト情報取得エラー: {e}")
             return []
         
         # トラック情報を取得する
-        results = sp.playlist_items(playlist_id)
         tracks = []
-        for item in results['items']:
-            if item['track'] is None:
-                continue
+        
+        # ページングでトラックを取得
+        results = sp.playlist_items(playlist_id, limit=100)
+        current_tracks = [item for item in results['items'] if item['track']]
+        tracks.extend(current_tracks)
+        
+        while results['next']:
+            results = sp.next(results)
+            current_tracks = [item for item in results['items'] if item['track']]
+            tracks.extend(current_tracks)
+        
+        # トラック情報を整形
+        formatted_tracks = []
+        for item in tracks:
             track = item['track']
-            tracks.append({
-                'name': track['name'],
-                'artist': track['artists'][0]['name'],
-                'album': track['album']['name'] if 'album' in track else ''
-            })
-        logger.info(f"{len(tracks)}曲の情報を取得しました")
-        return tracks
+            if track:  # トラックが存在する場合のみ追加
+                formatted_tracks.append({
+                    'name': track['name'],
+                    'artist': track['artists'][0]['name'],
+                    'album': track['album']['name'] if 'album' in track else ''
+                })
+        
+        logger.info(f"{len(formatted_tracks)}曲の情報を取得しました")
+        return formatted_tracks
     except Exception as e:
         logger.error(f"トラック情報の取得に失敗しました: {e}")
         return []
@@ -122,14 +119,13 @@ def update_qobuz_playlist(playlist_name, tracks):
     
     # Chromeの設定
     chrome_options = Options()
-    # GitHub Actionsでは一旦ヘッドレスモードを無効化してデバッグ
-    # chrome_options.add_argument("--headless")
+    # GitHub Actionsではヘッドレスモードを使用
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
     # デバッグオプション追加
     chrome_options.add_argument("--verbose")
-    chrome_options.add_argument("--log-level=0")
     
     # Chromeドライバーセットアップ
     try:
@@ -190,9 +186,6 @@ def update_qobuz_playlist(playlist_name, tracks):
         logger.info("プレイリストページに移動しました")
         time.sleep(5)  # ページの読み込みを待つ
         save_screenshot(driver, "playlists_page")
-        
-        # ページソースをログに出力（デバッグ用）
-        logger.info(f"プレイリストページのソース長さ: {len(driver.page_source)}")
         
         # プレイリストの存在確認
         logger.info(f"プレイリスト '{playlist_name}' を確認中...")
@@ -442,36 +435,34 @@ def main():
         # Spotify API初期化
         sp = initialize_spotify()
         
-        # プレイリストIDを優先的に使用
+        # プレイリストIDを取得
         discover_weekly_id = os.environ.get("DISCOVER_WEEKLY_ID")
         release_radar_id = os.environ.get("RELEASE_RADAR_ID")
         
         logger.info(f"設定されたDiscover Weekly ID: {discover_weekly_id}")
         logger.info(f"設定されたRelease Radar ID: {release_radar_id}")
         
-        if not discover_weekly_id:
-            logger.info("Discover Weekly IDが設定されていないため、名前で検索します")
-            discover_weekly_id = get_playlist_id_by_name(sp, "Discover Weekly")
-        
-        if not release_radar_id:
-            logger.info("Release Radar IDが設定されていないため、名前で検索します")
-            release_radar_id = get_playlist_id_by_name(sp, "Release Radar")
-        
-        if not discover_weekly_id:
-            logger.error("Discover Weeklyプレイリストが見つかりませんでした")
-        else:
+        if discover_weekly_id:
             # Discover Weeklyの同期
             logger.info("Discover Weeklyの同期を開始します")
             discover_tracks = get_playlist_tracks(sp, discover_weekly_id)
-            update_qobuz_playlist("Discover Weekly (Spotify)", discover_tracks)
-        
-        if not release_radar_id:
-            logger.error("Release Radarプレイリストが見つかりませんでした")
+            if discover_tracks:
+                update_qobuz_playlist("Discover Weekly (Spotify)", discover_tracks)
+            else:
+                logger.error("Discover Weeklyのトラックが取得できませんでした")
         else:
+            logger.error("DISCOVER_WEEKLY_IDが設定されていません")
+        
+        if release_radar_id:
             # Release Radarの同期
             logger.info("Release Radarの同期を開始します")
             release_tracks = get_playlist_tracks(sp, release_radar_id)
-            update_qobuz_playlist("Release Radar (Spotify)", release_tracks)
+            if release_tracks:
+                update_qobuz_playlist("Release Radar (Spotify)", release_tracks)
+            else:
+                logger.error("Release Radarのトラックが取得できませんでした")
+        else:
+            logger.error("RELEASE_RADAR_IDが設定されていません")
         
         logger.info("全ての処理が完了しました")
     
