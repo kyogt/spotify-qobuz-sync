@@ -24,12 +24,36 @@ logger = logging.getLogger(__name__)
 def initialize_spotify():
     try:
         scope = "playlist-read-private"
-        sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+        
+        # 認証キャッシュが環境変数にあればファイルに書き出す
+        if "SPOTIFY_AUTH_CACHE" in os.environ:
+            logger.info("SPOTIFY_AUTH_CACHEを使用して認証を試みます")
+            with open(".cache", "w") as cache_file:
+                cache_file.write(os.environ["SPOTIFY_AUTH_CACHE"])
+        else:
+            logger.warning("SPOTIFY_AUTH_CACHEが見つかりません。認証が失敗する可能性があります。")
+        
+        # 認証マネージャーを作成（対話的認証を無効化）
+        auth_manager = SpotifyOAuth(
             client_id=os.environ["SPOTIFY_CLIENT_ID"],
             client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
             redirect_uri="http://localhost:8888/callback",
             scope=scope,
-            open_browser=False))  # GitHubアクションで実行する場合はブラウザを開かない
+            open_browser=False,
+            cache_path=".cache"  # キャッシュファイルのパスを明示的に指定
+        )
+        
+        # 既存のトークンからSpotifyクライアントを初期化
+        sp = spotipy.Spotify(auth_manager=auth_manager)
+        
+        # 認証テスト
+        try:
+            current_user = sp.current_user()
+            logger.info(f"Spotify認証成功: {current_user['display_name']}")
+        except Exception as e:
+            logger.error(f"認証テストに失敗しました: {e}")
+            raise
+        
         return sp
     except Exception as e:
         logger.error(f"Spotify APIの初期化に失敗しました: {e}")
@@ -229,14 +253,19 @@ def main():
         # Spotify API初期化
         sp = initialize_spotify()
         
-        # プレイリストIDの取得
-        # 環境変数で指定されていればそれを使う、指定がなければ名前で検索
+        # プレイリストIDを優先的に使用
         discover_weekly_id = os.environ.get("DISCOVER_WEEKLY_ID")
         release_radar_id = os.environ.get("RELEASE_RADAR_ID")
         
+        logger.info(f"設定されたDiscover Weekly ID: {discover_weekly_id}")
+        logger.info(f"設定されたRelease Radar ID: {release_radar_id}")
+        
         if not discover_weekly_id:
+            logger.info("Discover Weekly IDが設定されていないため、名前で検索します")
             discover_weekly_id = get_playlist_id_by_name(sp, "Discover Weekly")
+        
         if not release_radar_id:
+            logger.info("Release Radar IDが設定されていないため、名前で検索します")
             release_radar_id = get_playlist_id_by_name(sp, "Release Radar")
         
         if not discover_weekly_id:
