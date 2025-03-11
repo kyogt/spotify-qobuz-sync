@@ -30,5 +30,8 @@ jobs:
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_AUTH_CACHE: ${{ secrets.SPOTIFY_AUTH_CACHE }}
+          DISCOVER_WEEKLY_ID: ${{ secrets.DISCOVER_WEEKLY_ID }}
+          RELEASE_RADAR_ID: ${{ secrets.RELEASE_RADAR_ID }}
           QOBUZ_EMAIL: ${{ secrets.QOBUZ_EMAIL }}
           QOBUZ_PASSWORD: ${{ secrets.QOBUZ_PASSWORD }}
