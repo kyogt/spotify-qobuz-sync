@@ -421,17 +421,20 @@ def sync_to_qobuz(spotify_tracks, qobuz_email, qobuz_password):
         
         # トラックの追加
         success_count = 0
-        logging.info(f"トラック追加を開始します (最大50曲)")
-        for i, track in enumerate(spotify_tracks):
-            # 最大50曲まで処理（長すぎる処理を避けるため）
-            if success_count >= 50:
+        # 初期テストのため、最初の10曲だけを処理
+        max_tracks = 10  # テスト段階では少ない曲数から始める
+        
+        logging.info(f"トラック追加を開始します (最大{max_tracks}曲)")
+        for i, track in enumerate(spotify_tracks[:max_tracks]):
+            # 曲数の制限
+            if success_count >= max_tracks:
                 logging.info("最大曲数に達したため、処理を終了します")
                 break
                 
-            logging.info(f"トラック {i+1}/{len(spotify_tracks)} を処理中: {track['artist']} - {track['name']}")
+            logging.info(f"トラック {i+1}/{min(len(spotify_tracks), max_tracks)} を処理中: {track['artist']} - {track['name']}")
             if search_and_add_track(browser, track):
                 success_count += 1
-                logging.info(f"トラック追加成功 ({success_count}/50)")
+                logging.info(f"トラック追加成功 ({success_count}/{max_tracks})")
                 # トラック追加間の待機（サーバー負荷軽減）
                 wait_time = random.uniform(1.5, 3)
                 logging.info(f"次のトラック処理まで{wait_time:.1f}秒間待機します")
@@ -479,11 +482,7 @@ if __name__ == "__main__":
         if tracks:
             logging.info(f"トラック取得成功: {len(tracks)}曲")
             
-            # テスト段階のためQobuz同期はスキップ（本番環境では以下のコメントを解除）
-            logging.info("Qobuz同期はスキップします（テスト段階）")
-            
-            # 本番用コード（準備ができたらコメントを解除）
-            """
+            # Qobuz同期を有効化
             qobuz_email = os.environ.get("QOBUZ_EMAIL")
             qobuz_password = os.environ.get("QOBUZ_PASSWORD")
             
@@ -496,7 +495,6 @@ if __name__ == "__main__":
                     logging.error("Qobuz同期に失敗しました")
             else:
                 logging.error("QobuzのログインIDまたはパスワードが設定されていません")
-            """
         else:
             logging.error("同期するトラックが見つかりませんでした")
         
