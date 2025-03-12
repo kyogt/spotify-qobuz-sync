@@ -436,33 +436,20 @@ def main():
         sp = initialize_spotify()
         
         # プレイリストIDを取得
-        discover_weekly_id = os.environ.get("DISCOVER_WEEKLY_ID")
-        release_radar_id = os.environ.get("RELEASE_RADAR_ID")
+        combined_playlist_id = os.environ.get("DISCOVER_WEEKLY_ID")  # ここでは統合プレイリストIDにDiscover Weekly IDを使用
         
-        logger.info(f"設定されたDiscover Weekly ID: {discover_weekly_id}")
-        logger.info(f"設定されたRelease Radar ID: {release_radar_id}")
+        logger.info(f"設定された統合プレイリストID: {combined_playlist_id}")
         
-        if discover_weekly_id:
-            # Discover Weeklyの同期
-            logger.info("Discover Weeklyの同期を開始します")
-            discover_tracks = get_playlist_tracks(sp, discover_weekly_id)
-            if discover_tracks:
-                update_qobuz_playlist("Discover Weekly (Spotify)", discover_tracks)
+        if combined_playlist_id:
+            # 統合プレイリストの同期
+            logger.info("統合プレイリストの同期を開始します")
+            combined_tracks = get_playlist_tracks(sp, combined_playlist_id)
+            if combined_tracks:
+                update_qobuz_playlist("Spotify Discover & Release (Combined)", combined_tracks)
             else:
-                logger.error("Discover Weeklyのトラックが取得できませんでした")
+                logger.error("統合プレイリストのトラックが取得できませんでした")
         else:
-            logger.error("DISCOVER_WEEKLY_IDが設定されていません")
-        
-        if release_radar_id:
-            # Release Radarの同期
-            logger.info("Release Radarの同期を開始します")
-            release_tracks = get_playlist_tracks(sp, release_radar_id)
-            if release_tracks:
-                update_qobuz_playlist("Release Radar (Spotify)", release_tracks)
-            else:
-                logger.error("Release Radarのトラックが取得できませんでした")
-        else:
-            logger.error("RELEASE_RADAR_IDが設定されていません")
+            logger.error("DISCOVER_WEEKLY_ID（統合プレイリストID）が設定されていません")
         
         logger.info("全ての処理が完了しました")
     
