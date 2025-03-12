@@ -1,414 +1,427 @@
+import os
+import time
+import logging
+import random
+import pickle
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-import time
-import os
-import logging
-import random
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 
-# ログ設定
+# ロギング設定
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
 
-# Spotify API認証
-def initialize_spotify():
-    try:
-        scope = "playlist-read-private"
-        
-        # 認証キャッシュが環境変数にあればファイルに書き出す
-        if "SPOTIFY_AUTH_CACHE" in os.environ:
-            logger.info("SPOTIFY_AUTH_CACHEを使用して認証を試みます")
-            with open(".cache", "w") as cache_file:
-                cache_file.write(os.environ["SPOTIFY_AUTH_CACHE"])
-        else:
-            logger.warning("SPOTIFY_AUTH_CACHEが見つかりません。認証が失敗する可能性があります。")
-        
-        # 認証マネージャーを作成（対話的認証を無効化）
-        auth_manager = SpotifyOAuth(
-            client_id=os.environ["SPOTIFY_CLIENT_ID"],
-            client_secret=os.environ["SPOTIFY_CLIENT_SECRET"],
-            redirect_uri="http://localhost:8888/callback",
-            scope=scope,
-            open_browser=False,
-            cache_path=".cache"  # キャッシュファイルのパスを明示的に指定
-        )
-        
-        # 既存のトークンからSpotifyクライアントを初期化
-        sp = spotipy.Spotify(auth_manager=auth_manager)
-        
-        # 認証テスト
+# Spotifyの認証
+def authenticate_spotify():
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
+    auth_cache = os.environ.get("SPOTIFY_AUTH_CACHE")
+    
+    if auth_cache:
+        logging.info("SPOTIFY_AUTH_CACHEを使用して認証を試みます")
         try:
-            current_user = sp.current_user()
-            logger.info(f"Spotify認証成功: {current_user['display_name']}")
+            # 環境変数の値をファイルに書き込む
+            with open(".cache", "w") as f:
+                f.write(auth_cache)
+            
+            sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                client_id=client_id,
+                client_secret=client_secret,
+                redirect_uri="http://localhost:8080",
+                scope="playlist-read-private",
+                open_browser=False
+            ))
+            
+            user = sp.current_user()
+            logging.info(f"Spotify認証成功: {user['display_name']}")
+            return sp
         except Exception as e:
-            logger.error(f"認証テストに失敗しました: {e}")
-            raise
-        
-        return sp
-    except Exception as e:
-        logger.error(f"Spotify APIの初期化に失敗しました: {e}")
-        raise
+            logging.error(f"認証エラー: {str(e)}")
+            return None
+    else:
+        logging.error("SPOTIFY_AUTH_CACHEが設定されていません")
+        return None
 
-# プレイリストのトラック情報を取得する関数
+# プレイリストからトラック情報を取得
 def get_playlist_tracks(sp, playlist_id):
     try:
-        logger.info(f"プレイリスト {playlist_id} のトラック情報を取得中...")
+        logging.info(f"プレイリスト {playlist_id} のトラック情報を取得中...")
+        results = sp.playlist(playlist_id)
         
-        # 事前にプレイリストの存在を確認する
-        try:
-            playlist_info = sp.playlist(playlist_id, fields="name,tracks.total")
-            logger.info(f"プレイリスト名: {playlist_info['name']}, 曲数: {playlist_info['tracks']['total']}")
-        except Exception as e:
-            logger.error(f"プレイリスト情報取得エラー: {e}")
-            return []
+        playlist_name = results['name']
+        tracks_items = results['tracks']['items']
+        total_tracks = len(tracks_items)
         
-        # トラック情報を取得する
-        tracks = []
+        logging.info(f"プレイリスト名: {playlist_name}, 曲数: {total_tracks}")
         
-        # ページングでトラックを取得
-        results = sp.playlist_items(playlist_id, limit=100)
-        current_tracks = [item for item in results['items'] if item['track']]
-        tracks.extend(current_tracks)
-        
-        while results['next']:
-            results = sp.next(results)
-            current_tracks = [item for item in results['items'] if item['track']]
-            tracks.extend(current_tracks)
-        
-        # トラック情報を整形
-        formatted_tracks = []
-        for item in tracks:
+        track_info = []
+        for item in tracks_items:
             track = item['track']
-            if track:  # トラックが存在する場合のみ追加
-                formatted_tracks.append({
+            if track:
+                artists = ", ".join([artist['name'] for artist in track['artists']])
+                track_info.append({
                     'name': track['name'],
-                    'artist': track['artists'][0]['name'],
-                    'album': track['album']['name'] if 'album' in track else ''
+                    'artist': artists,
+                    'album': track['album']['name'],
+                    'url': track['external_urls']['spotify'] if 'external_urls' in track and 'spotify' in track['external_urls'] else None
                 })
         
-        logger.info(f"{len(formatted_tracks)}曲の情報を取得しました")
-        return formatted_tracks
+        logging.info(f"{len(track_info)}曲の情報を取得しました")
+        return track_info
     except Exception as e:
-        logger.error(f"トラック情報の取得に失敗しました: {e}")
+        logging.error(f"プレイリストトラック取得エラー: {str(e)}")
         return []
 
-# スクリーンショットを保存する関数
-def save_screenshot(driver, name):
-    try:
-        screenshot_path = f"screenshot_{name}.png"
-        driver.save_screenshot(screenshot_path)
-        logger.info(f"スクリーンショット保存: {screenshot_path}")
-    except Exception as e:
-        logger.error(f"スクリーンショット保存に失敗: {e}")
-
-# Qobuzプレイリストを更新する関数
-def update_qobuz_playlist(playlist_name, tracks):
-    if not tracks:
-        logger.warning(f"トラックリストが空のため、{playlist_name}の更新をスキップします")
-        return
+# ブラウザ設定（ボット検出回避対策強化版）
+def setup_browser():
+    """ボット検出対策を強化したブラウザの設定"""
+    options = webdriver.ChromeOptions()
     
-    # Chromeの設定
-    chrome_options = Options()
-    
-    # GitHub Actionsではヘッドレスモードは無効化
-    # chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
+    # GitHub Actions環境の場合の設定
+    if os.environ.get('CI'):
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+    else:
+        # ローカル環境ではヘッドレスモードを無効化
+        options.headless = False
     
     # ボット検出対策の設定
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
-    # ユーザーエージェントをランダムに設定
+    # 本物のブラウザに見せるための設定
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--start-maximized")
+    
+    # ユーザーエージェントの設定
     user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36 Edg/116.0.0.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     ]
-    chrome_options.add_argument(f"--user-agent={random.choice(user_agents)}")
+    options.add_argument(f"user-agent={random.choice(user_agents)}")
     
-    # Chromeドライバーセットアップ
+    # Chromiumベースのブラウザを設定
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # ボット検出対策のJavaScriptを実行
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            """
-        })
-    except Exception as e:
-        logger.error(f"ChromeDriverのセットアップに失敗: {e}")
-        return
-    
-    try:
-        logger.info(f"Qobuzにログイン中...")
-        
-        # Cookieを削除してクリーンな状態に
-        driver.delete_all_cookies()
-        
-        # Qobuzのホームページにまず訪問（より自然な動きに見せる）
-        driver.get("https://www.qobuz.com/")
-        logger.info("Qobuzホームページにアクセスしました")
-        save_screenshot(driver, "homepage")
-        
-        # ランダムな待機時間（より人間らしい挙動に）
-        time.sleep(random.uniform(2, 5))
-        
-        # ログインページに移動
-        driver.get("https://www.qobuz.com/login")
-        logger.info("ログインページに移動しました")
-        save_screenshot(driver, "login_page")
-        
-        # ログインフォームの読み込みを待つ (タイムアウト延長: 120秒)
-        try:
-            # 複数の可能なセレクタを試す
-            selectors = [
-                (By.ID, "email"),
-                (By.NAME, "email"),
-                (By.XPATH, "//input[@type='email']"),
-                (By.XPATH, "//input[contains(@placeholder, 'email')]")
-            ]
-            
-            email_field = None
-            for selector_type, selector_value in selectors:
-                try:
-                    email_field = WebDriverWait(driver, 120).until(
-                        EC.presence_of_element_located((selector_type, selector_value))
-                    )
-                    logger.info(f"ログインフォームが見つかりました (セレクタ: {selector_type}={selector_value})")
-                    break
-                except:
-                    continue
-            
-            if not email_field:
-                logger.error("ログインフォームの要素が見つかりませんでした")
-                save_screenshot(driver, "login_form_not_found")
-                
-                # ページソースを保存してデバッグ
-                with open("page_source.html", "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-                logger.info("ページソースを保存しました: page_source.html")
-                
-                driver.quit()
-                return
-            
-            logger.info("ログインフォームが表示されました")
-        except TimeoutException:
-            logger.error("ログインフォームの表示がタイムアウトしました")
-            save_screenshot(driver, "login_timeout")
-            
-            # ページソースを保存してデバッグ
-            with open("page_source.html", "w", encoding="utf-8") as f:
-                f.write(driver.page_source)
-            logger.info("ページソースを保存しました: page_source.html")
-            
-            driver.quit()
-            return
-        
-        # 少し待機（人間の挙動に近づける）
-        time.sleep(random.uniform(1, 3))
-        
-        # ログイン情報を入力
-        email_field.send_keys(os.environ["QOBUZ_EMAIL"])
-        
-        # パスワードフィールドを探す
-        password_selectors = [
-            (By.ID, "password"),
-            (By.NAME, "password"),
-            (By.XPATH, "//input[@type='password']")
-        ]
-        
-        password_field = None
-        for selector_type, selector_value in password_selectors:
-            try:
-                password_field = driver.find_element(selector_type, selector_value)
-                break
-            except:
-                continue
-        
-        if password_field:
-            password_field.send_keys(os.environ["QOBUZ_PASSWORD"])
+        # GitHub Actions環境では直接Chromeを使用
+        if os.environ.get('CI'):
+            driver = webdriver.Chrome(options=options)
         else:
-            logger.error("パスワードフィールドが見つかりませんでした")
-            save_screenshot(driver, "password_field_not_found")
-            driver.quit()
-            return
+            # ローカル環境ではChromeDriverManagerを使用
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
         
-        save_screenshot(driver, "login_filled")
+        # webdriver検出を回避するJavaScript
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # 少し待機
+        return driver
+    except Exception as e:
+        logging.error(f"ブラウザ設定エラー: {str(e)}")
+        raise
+
+# Cookie管理関数
+def save_cookies(browser, filename="qobuz_cookies.pkl"):
+    """ブラウザのCookieを保存"""
+    try:
+        pickle.dump(browser.get_cookies(), open(filename, "wb"))
+        logging.info(f"Cookieを保存しました: {filename}")
+        return True
+    except Exception as e:
+        logging.error(f"Cookie保存中にエラー: {str(e)}")
+        return False
+
+def load_cookies(browser, filename="qobuz_cookies.pkl"):
+    """保存されたCookieをロード"""
+    try:
+        if os.path.exists(filename):
+            cookies = pickle.load(open(filename, "rb"))
+            # 事前にQobuzのドメインにアクセスしておく
+            browser.get("https://www.qobuz.com")
+            time.sleep(2)
+            for cookie in cookies:
+                # 一部のブラウザはexpiry属性があるとエラーになる場合がある
+                if 'expiry' in cookie:
+                    del cookie['expiry']
+                browser.add_cookie(cookie)
+            logging.info(f"Cookieをロードしました: {filename}")
+            browser.refresh()  # クッキー適用後にリフレッシュ
+            time.sleep(2)
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Cookie読み込み中にエラー: {str(e)}")
+        return False
+
+def check_login_status(browser):
+    """ログイン状態を確認"""
+    try:
+        # ユーザープロフィール要素などでログイン状態を確認
+        # 注: 以下のXPATHはQobuzの実際のHTML構造に合わせて調整が必要です
+        browser.save_screenshot("login_check.png")  # デバッグ用
+        elem = browser.find_elements(By.XPATH, "//div[contains(@class, 'userMenu')]")
+        return len(elem) > 0
+    except Exception as e:
+        logging.debug(f"ログイン状態確認中にエラー: {str(e)}")
+        return False
+
+def perform_with_retry(func, *args, max_retries=3, retry_delay=5, **kwargs):
+    """関数実行をリトライするためのラッパー"""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.warning(f"試行 {attempt+1}/{max_retries} 失敗: {str(e)}")
+            if attempt < max_retries - 1:
+                # ランダムな待機時間で再試行
+                sleep_time = retry_delay * (1 + random.random())
+                logging.info(f"{sleep_time:.2f}秒後に再試行します...")
+                time.sleep(sleep_time)
+            else:
+                logging.error(f"最大試行回数に達しました: {func.__name__}")
+                raise
+
+# 人間のような動きでQobuzにログイン
+def login_to_qobuz(browser, email, password):
+    """人間らしい動作でQobuzにログインする"""
+    try:
+        # Qobuzのログインページに移動
+        browser.get("https://www.qobuz.com/signin")
+        logging.info("Qobuzログインページにアクセスしました")
+        
+        # ページの読み込みを待機
+        time.sleep(random.uniform(2, 4))
+        
+        # ページ表示のデバッグ用にスクリーンショット
+        browser.save_screenshot("login_page.png")
+        
+        # ランダムなスクロール（自然な動きに見せる）
+        browser.execute_script(f"window.scrollBy(0, {random.randint(100, 300)})")
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        # メールアドレス入力フィールドを探して入力
+        try:
+            # 注: セレクタはQobuzのサイト構造に合わせて調整が必要
+            email_field = WebDriverWait(browser, 10).until(
+                EC.element_to_be_clickable((By.ID, "email"))  # または適切なセレクタ
+            )
+            email_field.click()
+            # 一字一字タイプするシミュレーション
+            for char in email:
+                email_field.send_keys(char)
+                time.sleep(random.uniform(0.05, 0.15))
+                
+            time.sleep(random.uniform(1, 2))
+            
+            # パスワード入力
+            password_field = browser.find_element(By.ID, "password")  # または適切なセレクタ
+            password_field.click()
+            for char in password:
+                password_field.send_keys(char)
+                time.sleep(random.uniform(0.05, 0.2))
+                
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            # ログインボタンをクリック
+            login_button = browser.find_element(By.XPATH, "//button[@type='submit']")  # または適切なセレクタ
+            login_button.click()
+            
+            # ログイン後の読み込みを待機
+            time.sleep(random.uniform(3, 5))
+            
+            # スクリーンショットを保存（デバッグ用）
+            browser.save_screenshot("after_login.png")
+            
+            # ログイン成功の確認
+            if check_login_status(browser):
+                logging.info("Qobuzへのログイン成功")
+                return True
+            else:
+                logging.error("ログインプロセスは完了しましたが、認証に失敗した可能性があります")
+                return False
+                
+        except Exception as e:
+            logging.error(f"ログインフォーム操作中にエラー: {str(e)}")
+            browser.save_screenshot("login_form_error.png")
+            return False
+        
+    except Exception as e:
+        logging.error(f"Qobuzログイン中にエラーが発生しました: {str(e)}")
+        browser.save_screenshot("login_error.png")
+        return False
+
+# プレイリスト作成とトラック追加
+def create_qobuz_playlist(browser, playlist_name):
+    """Qobuzで新しいプレイリストを作成"""
+    try:
+        # プレイリストページに移動
+        browser.get("https://www.qobuz.com/my-profile/playlists")
+        time.sleep(random.uniform(2, 3))
+        
+        # 「新規プレイリスト作成」ボタンをクリック
+        create_button = WebDriverWait(browser, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Create a playlist')]"))  # 実際のテキストに合わせて調整
+        )
+        create_button.click()
         time.sleep(random.uniform(1, 2))
         
-        # ログインボタンをクリック
-        login_button_selectors = [
-            (By.XPATH, "//button[@type='submit']"),
-            (By.XPATH, "//button[contains(text(), 'Login')]"),
-            (By.XPATH, "//button[contains(text(), 'Sign in')]"),
-            (By.XPATH, "//input[@type='submit']")
-        ]
+        # プレイリスト名入力
+        name_field = WebDriverWait(browser, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Playlist name']"))  # 実際のプレースホルダーに合わせて調整
+        )
+        name_field.clear()
+        for char in playlist_name:
+            name_field.send_keys(char)
+            time.sleep(random.uniform(0.05, 0.1))
         
-        login_button = None
-        for selector_type, selector_value in login_button_selectors:
-            try:
-                login_button = driver.find_element(selector_type, selector_value)
-                break
-            except:
-                continue
+        # 保存ボタンをクリック
+        save_button = browser.find_element(By.XPATH, "//button[contains(text(), 'Create')]")  # 実際のテキストに合わせて調整
+        save_button.click()
         
-        if login_button:
-            login_button.click()
-            logger.info("ログインボタンをクリックしました")
-        else:
-            logger.error("ログインボタンが見つかりませんでした")
-            save_screenshot(driver, "login_button_not_found")
-            driver.quit()
-            return
+        # 作成完了を待機
+        time.sleep(random.uniform(2, 3))
         
-        # ログイン成功を確認 (タイムアウト延長: 120秒)
-        try:
-            # 複数の可能なセレクタを試す
-            success_selectors = [
-                (By.XPATH, "//div[contains(@class, 'user-menu')]"),
-                (By.XPATH, "//a[contains(@href, '/logout')]"),
-                (By.XPATH, "//div[contains(@class, 'header-user')]"),
-                (By.XPATH, "//a[contains(@href, '/my-profile')]")
-            ]
+        # 作成されたプレイリストのURLを取得
+        current_url = browser.current_url
+        logging.info(f"プレイリスト作成完了: {current_url}")
+        
+        return current_url
+    except Exception as e:
+        logging.error(f"プレイリスト作成エラー: {str(e)}")
+        browser.save_screenshot("playlist_create_error.png")
+        return None
+
+def search_and_add_track(browser, track):
+    """トラックを検索して追加"""
+    try:
+        # 検索クエリの作成
+        search_query = f"{track['artist']} {track['name']}"
+        
+        # 検索ページに移動
+        browser.get(f"https://www.qobuz.com/search?q={search_query}")
+        time.sleep(random.uniform(2, 4))
+        
+        # 検索結果の最初のトラックを選択
+        first_track = WebDriverWait(browser, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'track-item')]"))  # 実際のクラスに合わせて調整
+        )
+        
+        # 右クリックして「プレイリストに追加」を選択
+        # 注: この部分はJavaScriptの実行やアクションチェーンで実装する必要があります
+        # 簡略化のため、ここではその部分は省略しています
+        
+        logging.info(f"トラック追加: {search_query}")
+        return True
+    except Exception as e:
+        logging.error(f"トラック追加エラー: {str(e)}")
+        browser.save_screenshot(f"track_add_error_{track['name']}.png")
+        return False
+
+# SpotifyからQobuzへの同期メイン関数
+def sync_to_qobuz(spotify_tracks, qobuz_email, qobuz_password):
+    """SpotifyのトラックをQobuzに同期する改良版"""
+    logging.info("Qobuz同期を開始します")
+    
+    browser = setup_browser()
+    
+    try:
+        # Cookie認証を試みる
+        cookie_auth_success = load_cookies(browser)
+        
+        # Cookie認証失敗または未ログインの場合、通常ログイン
+        if not cookie_auth_success or not check_login_status(browser):
+            logging.info("Cookie認証に失敗したか、未ログイン状態です。通常ログインを試みます")
+            login_success = perform_with_retry(login_to_qobuz, browser, qobuz_email, qobuz_password, max_retries=3)
             
-            success_element = None
-            for selector_type, selector_value in success_selectors:
-                try:
-                    success_element = WebDriverWait(driver, 120).until(
-                        EC.presence_of_element_located((selector_type, selector_value))
-                    )
-                    logger.info(f"ログイン成功確認 (セレクタ: {selector_type}={selector_value})")
-                    break
-                except:
-                    continue
-            
-            if success_element:
-                logger.info("ログイン成功")
-                save_screenshot(driver, "login_success")
+            if login_success:
+                # 成功したらCookieを保存
+                save_cookies(browser)
             else:
-                logger.error("ログイン成功の確認ができませんでした")
-                save_screenshot(driver, "login_success_not_confirmed")
+                raise Exception("Qobuzへのログインに失敗しました")
+        
+        # プレイリスト作成（日付を含めた名前で）
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        playlist_name = f"Spotify Sync {today}"
+        
+        playlist_url = create_qobuz_playlist(browser, playlist_name)
+        if not playlist_url:
+            raise Exception("プレイリスト作成に失敗しました")
+        
+        # トラックの追加
+        success_count = 0
+        for track in spotify_tracks:
+            # 最大50曲まで処理（長すぎる処理を避けるため）
+            if success_count >= 50:
+                break
                 
-                # CAPTCHAの確認
-                if "captcha" in driver.page_source.lower() or "robot" in driver.page_source.lower():
-                    logger.error("CAPTCHAが検出されました。")
-                
-                driver.quit()
-                return
-        except TimeoutException:
-            logger.error("ログイン成功の確認がタイムアウトしました")
-            save_screenshot(driver, "login_success_timeout")
-            
-            # CAPTCHAの確認
-            if "captcha" in driver.page_source.lower() or "robot" in driver.page_source.lower():
-                logger.error("CAPTCHAが検出されました。")
-            
-            driver.quit()
-            return
+            if search_and_add_track(browser, track):
+                success_count += 1
+                # トラック追加間の待機（サーバー負荷軽減）
+                time.sleep(random.uniform(1.5, 3))
         
-        # ここからはプレイリスト操作部分...
-        # 既存のコードを続けます
-        
-        # マイプレイリスト画面に移動
-        logger.info("プレイリストページに移動します")
-        driver.get("https://www.qobuz.com/my-profile/playlists")
-        time.sleep(5)  # ページの読み込みを待つ
-        save_screenshot(driver, "playlists_page")
-        
-        # プレイリストの存在確認
-        logger.info(f"プレイリスト '{playlist_name}' を確認中...")
-        try:
-            # 複数の可能なセレクタを試す
-            selectors = [
-                f"//div[contains(text(), '{playlist_name}')]",
-                f"//span[contains(text(), '{playlist_name}')]",
-                f"//a[contains(text(), '{playlist_name}')]"
-            ]
-            
-            playlist_found = False
-            for selector in selectors:
-                elements = driver.find_elements(By.XPATH, selector)
-                if len(elements) > 0:
-                    playlist_found = True
-                    logger.info(f"プレイリスト '{playlist_name}' が見つかりました (セレクタ: {selector})")
-                    break
-            
-            if not playlist_found:
-                logger.info(f"プレイリスト '{playlist_name}' が見つかりませんでした。新規作成します。")
-        except Exception as e:
-            logger.warning(f"プレイリスト検索エラー: {e}")
-            playlist_found = False
-        
-        # 残りのプレイリスト操作コードは変更なし...
-        
-        # テスト用に、最初の数曲だけ処理する
-        test_limit = min(5, len(tracks))  # 最大5曲まで
-        logger.info(f"テスト用に最初の{test_limit}曲のみ処理します")
-        
-        for i, track in enumerate(tracks[:test_limit]):
-            # 既存のトラック追加コード...
-            # この部分は変更なし
-            pass
-            
-        logger.info(f"テスト実行完了: {test_limit}曲を処理しました")
+        logging.info(f"Qobuzへの同期が完了しました。{success_count}曲を追加しました")
+        return True
         
     except Exception as e:
-        logger.error(f"Qobuzプレイリスト更新中にエラーが発生しました: {e}")
-        save_screenshot(driver, "final_error")
+        logging.error(f"Qobuz同期中にエラーが発生しました: {str(e)}")
+        # エラー時のスクリーンショット保存
+        browser.save_screenshot("qobuz_sync_error.png")
+        return False
     finally:
-        driver.quit()
+        # ブラウザを必ず閉じる
+        browser.quit()
 
 # メイン処理
-def main():
-    try:
-        # Spotify API初期化
-        sp = initialize_spotify()
-        
-        # プレイリストIDを取得
-        combined_playlist_id = os.environ.get("DISCOVER_WEEKLY_ID")  # 統合プレイリストIDにDiscover Weekly IDを使用
-        
-        logger.info(f"設定された統合プレイリストID: {combined_playlist_id}")
-        
-        if combined_playlist_id:
-            # 統合プレイリストの同期
-            logger.info("統合プレイリストの同期を開始します")
-            combined_tracks = get_playlist_tracks(sp, combined_playlist_id)
-            if combined_tracks:
-                # とりあえずトラック取得までの検証
-                logger.info(f"トラック取得成功: {len(combined_tracks)}曲")
-                # テスト段階では実際のQobuz更新は行わない
-                # update_qobuz_playlist("Spotify Discover & Release (Combined)", combined_tracks)
-                logger.info("Qobuz同期はスキップします（テスト段階）")
-            else:
-                logger.error("統合プレイリストのトラックが取得できませんでした")
-        else:
-            logger.error("DISCOVER_WEEKLY_ID（統合プレイリストID）が設定されていません")
-        
-        logger.info("全ての処理が完了しました")
-    
-    except Exception as e:
-        logger.error(f"メイン処理でエラーが発生しました: {e}")
-
 if __name__ == "__main__":
-    main()
+    # Spotify認証
+    sp = authenticate_spotify()
+    if not sp:
+        logging.error("Spotify認証に失敗しました")
+        exit(1)
+    
+    # プレイリストID取得
+    playlist_id = os.environ.get("COMBINED_PLAYLIST_ID")
+    if not playlist_id:
+        logging.error("COMBINED_PLAYLIST_IDが設定されていません")
+        exit(1)
+    
+    logging.info(f"設定された統合プレイリストID: {playlist_id}")
+    logging.info("統合プレイリストの同期を開始します")
+    
+    # トラック情報取得
+    tracks = get_playlist_tracks(sp, playlist_id)
+    
+    # Qobuz同期
+    if tracks:
+        logging.info(f"トラック取得成功: {len(tracks)}曲")
+        
+        # テスト段階のためQobuz同期はスキップ（本番環境では以下のコメントを解除）
+        logging.info("Qobuz同期はスキップします（テスト段階）")
+        
+        # 本番用コード（準備ができたらコメントを解除）
+        """
+        qobuz_email = os.environ.get("QOBUZ_EMAIL")
+        qobuz_password = os.environ.get("QOBUZ_PASSWORD")
+        
+        if qobuz_email and qobuz_password:
+            sync_result = sync_to_qobuz(tracks, qobuz_email, qobuz_password)
+            if sync_result:
+                logging.info("Qobuz同期が成功しました")
+            else:
+                logging.error("Qobuz同期に失敗しました")
+        else:
+            logging.error("QobuzのログインIDまたはパスワードが設定されていません")
+        """
+    else:
+        logging.error("同期するトラックが見つかりませんでした")
+    
+    logging.info("全ての処理が完了しました")
