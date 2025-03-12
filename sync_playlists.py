@@ -389,10 +389,10 @@ if __name__ == "__main__":
         exit(1)
     
     # プレイリストID取得
-    playlist_id = os.environ.get("COMBINED_PLAYLIST_ID")
-    if not playlist_id:
-        logging.error("COMBINED_PLAYLIST_IDが設定されていません")
-        exit(1)
+    playlist_id = os.environ.get("COMBINED_PLAYLIST_ID") or os.environ.get("DISCOVER_WEEKLY_ID")
+if not playlist_id:
+    logging.error("COMBINED_PLAYLIST_IDまたはDISCOVER_WEEKLY_IDが設定されていません")
+    exit(1)
     
     logging.info(f"設定された統合プレイリストID: {playlist_id}")
     logging.info("統合プレイリストの同期を開始します")
