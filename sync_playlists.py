@@ -85,19 +85,20 @@ def get_playlist_tracks(sp, playlist_id):
 
 # ブラウザ設定（ボット検出回避対策強化版）
 def setup_browser():
-    """ボット検出対策を強化したブラウザの設定"""
+    """ボット検出対策を強化したブラウザの設定（改良版）"""
     try:
         options = webdriver.ChromeOptions()
         
         # GitHub Actions環境の場合の設定
         if os.environ.get('CI'):
             logging.info("CI環境を検出: ヘッドレスモード設定を適用します")
-            options.add_argument('--headless=new')  # 新しい構文のヘッドレスモード
+            # ヘッドレスモードを一時的に無効化してテスト
+            # options.add_argument('--headless=new')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
+            options.add_argument('--window-size=1920,1080')
         else:
-            # ローカル環境ではヘッドレスモードを無効化
             logging.info("ローカル環境: ヘッドレスモードを無効化します")
             options.headless = False
         
@@ -110,15 +111,18 @@ def setup_browser():
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--start-maximized")
         
-        # ユーザーエージェントの設定
+        # ユーザーエージェントの設定（より一般的なものに）
         user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.48"
         ]
         selected_agent = random.choice(user_agents)
         options.add_argument(f"user-agent={selected_agent}")
         logging.info(f"選択されたユーザーエージェント: {selected_agent}")
+        
+        # 追加の設定
+        options.add_argument("--disable-notifications")
         
         # Chromiumベースのブラウザを設定
         if os.environ.get('CI'):
@@ -207,88 +211,173 @@ def perform_with_retry(func, *args, max_retries=3, retry_delay=5, **kwargs):
                 raise
 
 # 人間のような動きでQobuzにログイン
+# login_to_qobuz関数の修正部分
+
 def login_to_qobuz(browser, email, password):
-    """人間らしい動作でQobuzにログインする"""
+    """人間らしい動作でQobuzにログインする（改良版）"""
     try:
         # Qobuzのログインページに移動
         browser.get("https://www.qobuz.com/signin")
         logging.info("Qobuzログインページにアクセスしました")
         
+        # ページソースを保存（デバッグ用）
+        with open("login_page_source.html", "w", encoding="utf-8") as f:
+            f.write(browser.page_source)
+        logging.info("ページソースを保存しました")
+        
         # ページの読み込みを待機
-        time.sleep(random.uniform(2, 4))
+        time.sleep(random.uniform(3, 5))
         
         # ページ表示のデバッグ用にスクリーンショット
         browser.save_screenshot("login_page.png")
         logging.info("ログインページのスクリーンショットを保存しました")
         
-        # ランダムなスクロール（自然な動きに見せる）
-        scroll_amount = random.randint(100, 300)
-        browser.execute_script(f"window.scrollBy(0, {scroll_amount})")
-        logging.info(f"{scroll_amount}ピクセル下にスクロールしました")
+        # より柔軟な要素検索方法を使用
+        logging.info("メールアドレス入力フィールドを検索中...")
+        
+        # 複数のセレクタを試行
+        selectors = [
+            (By.ID, "email"),
+            (By.NAME, "email"),
+            (By.NAME, "username"),
+            (By.ID, "username"),
+            (By.CSS_SELECTOR, "input[type='email']"),
+            (By.XPATH, "//input[@type='email']"),
+            (By.XPATH, "//form//input[contains(@placeholder, 'mail')]"),
+            (By.XPATH, "//form//input[1]")  # フォームの最初のinput要素を試す
+        ]
+        
+        email_field = None
+        for selector_type, selector_value in selectors:
+            try:
+                logging.info(f"セレクタを試行中: {selector_type} = {selector_value}")
+                email_field = WebDriverWait(browser, 3).until(
+                    EC.presence_of_element_located((selector_type, selector_value))
+                )
+                if email_field:
+                    logging.info(f"メールアドレス入力フィールドを発見: {selector_type} = {selector_value}")
+                    break
+            except Exception as e:
+                logging.info(f"セレクタ {selector_value} でフィールドが見つかりませんでした")
+                continue
+        
+        if not email_field:
+            # ページ上のすべてのinput要素を探してみる
+            logging.info("すべてのinput要素を探索中...")
+            inputs = browser.find_elements(By.TAG_NAME, "input")
+            logging.info(f"{len(inputs)}個のinput要素を発見")
+            
+            if len(inputs) > 0:
+                email_field = inputs[0]  # 最初のinput要素を使用
+                logging.info("最初のinput要素をメールアドレスフィールドとして使用します")
+            else:
+                raise Exception("メールアドレス入力フィールドが見つかりませんでした")
+        
+        # 以下は元のコードと同様...
+        email_field.click()
+        logging.info("メールアドレス入力フィールドを選択しました")
+        
+        # 一字一字タイプするシミュレーション
+        logging.info("メールアドレスを入力中...")
+        for char in email:
+            email_field.send_keys(char)
+            time.sleep(random.uniform(0.05, 0.15))
+            
+        time.sleep(random.uniform(1, 2))
+        
+        # パスワード入力（複数のセレクタを試行）
+        logging.info("パスワード入力フィールドを検索中...")
+        password_selectors = [
+            (By.ID, "password"),
+            (By.NAME, "password"),
+            (By.CSS_SELECTOR, "input[type='password']"),
+            (By.XPATH, "//input[@type='password']"),
+            (By.XPATH, "//form//input[2]")  # フォームの2番目のinput要素を試す
+        ]
+        
+        password_field = None
+        for selector_type, selector_value in password_selectors:
+            try:
+                logging.info(f"パスワードセレクタを試行中: {selector_type} = {selector_value}")
+                password_field = browser.find_element(selector_type, selector_value)
+                if password_field:
+                    logging.info(f"パスワード入力フィールドを発見: {selector_type} = {selector_value}")
+                    break
+            except:
+                continue
+        
+        if not password_field and len(inputs) > 1:
+            password_field = inputs[1]  # 2番目のinput要素を使用
+            logging.info("2番目のinput要素をパスワードフィールドとして使用します")
+        elif not password_field:
+            raise Exception("パスワード入力フィールドが見つかりませんでした")
+        
+        password_field.click()
+        logging.info("パスワード入力フィールドを選択しました")
+        
+        logging.info("パスワードを入力中...")
+        for char in password:
+            password_field.send_keys(char)
+            time.sleep(random.uniform(0.05, 0.2))
+            
         time.sleep(random.uniform(0.5, 1.5))
         
-        # メールアドレス入力フィールドを探して入力
-        try:
-            # 注: セレクタはQobuzのサイト構造に合わせて調整が必要
-            logging.info("メールアドレス入力フィールドを検索中...")
-            email_field = WebDriverWait(browser, 10).until(
-                EC.element_to_be_clickable((By.ID, "email"))  # または適切なセレクタ
-            )
-            email_field.click()
-            logging.info("メールアドレス入力フィールドを選択しました")
-            
-            # 一字一字タイプするシミュレーション
-            logging.info("メールアドレスを入力中...")
-            for char in email:
-                email_field.send_keys(char)
-                time.sleep(random.uniform(0.05, 0.15))
-                
-            time.sleep(random.uniform(1, 2))
-            
-            # パスワード入力
-            logging.info("パスワード入力フィールドを検索中...")
-            password_field = browser.find_element(By.ID, "password")  # または適切なセレクタ
-            password_field.click()
-            logging.info("パスワード入力フィールドを選択しました")
-            
-            logging.info("パスワードを入力中...")
-            for char in password:
-                password_field.send_keys(char)
-                time.sleep(random.uniform(0.05, 0.2))
-                
-            time.sleep(random.uniform(0.5, 1.5))
-            
-            # ログインボタンをクリック
-            logging.info("ログインボタンを検索中...")
-            login_button = browser.find_element(By.XPATH, "//button[@type='submit']")  # または適切なセレクタ
-            logging.info("ログインボタンをクリックします")
-            login_button.click()
-            
-            # ログイン後の読み込みを待機
-            wait_time = random.uniform(3, 5)
-            logging.info(f"ログイン処理の完了を{wait_time:.1f}秒間待機します")
-            time.sleep(wait_time)
-            
-            # スクリーンショットを保存（デバッグ用）
-            browser.save_screenshot("after_login.png")
-            logging.info("ログイン後のスクリーンショットを保存しました")
-            
-            # ログイン成功の確認
-            if check_login_status(browser):
-                logging.info("Qobuzへのログイン成功")
-                return True
-            else:
-                logging.error("ログインプロセスは完了しましたが、認証に失敗した可能性があります")
-                return False
-                
-        except Exception as e:
-            logging.error(f"ログインフォーム操作中にエラー: {str(e)}")
-            browser.save_screenshot("login_form_error.png")
-            return False
+        # ログインボタンを検索（複数の方法で試行）
+        logging.info("ログインボタンを検索中...")
+        button_selectors = [
+            (By.XPATH, "//button[@type='submit']"),
+            (By.XPATH, "//button[contains(., 'Sign')]"),
+            (By.XPATH, "//button[contains(., 'Log')]"),
+            (By.XPATH, "//input[@type='submit']"),
+            (By.XPATH, "//form//button"),
+            (By.CSS_SELECTOR, "form button")
+        ]
         
+        login_button = None
+        for selector_type, selector_value in button_selectors:
+            try:
+                login_button = browser.find_element(selector_type, selector_value)
+                if login_button:
+                    logging.info(f"ログインボタンを発見: {selector_type} = {selector_value}")
+                    break
+            except:
+                continue
+        
+        if not login_button:
+            # すべてのボタンを探す
+            buttons = browser.find_elements(By.TAG_NAME, "button")
+            if len(buttons) > 0:
+                login_button = buttons[0]  # 最初のボタンを使用
+                logging.info("最初のボタンをログインボタンとして使用します")
+            else:
+                raise Exception("ログインボタンが見つかりませんでした")
+        
+        logging.info("ログインボタンをクリックします")
+        login_button.click()
+        
+        # ログイン後の読み込みを待機
+        wait_time = random.uniform(3, 5)
+        logging.info(f"ログイン処理の完了を{wait_time:.1f}秒間待機します")
+        time.sleep(wait_time)
+        
+        # スクリーンショットを保存（デバッグ用）
+        browser.save_screenshot("after_login.png")
+        logging.info("ログイン後のスクリーンショットを保存しました")
+        
+        # ログイン成功の確認
+        if check_login_status(browser):
+            logging.info("Qobuzへのログイン成功")
+            return True
+        else:
+            logging.error("ログインプロセスは完了しましたが、認証に失敗した可能性があります")
+            return False
+                
     except Exception as e:
-        logging.error(f"Qobuzログイン中にエラーが発生しました: {str(e)}")
-        browser.save_screenshot("login_error.png")
+        logging.error(f"ログインフォーム操作中にエラー: {str(e)}")
+        browser.save_screenshot("login_form_error.png")
+        # ページソースを保存（エラー時のデバッグ用）
+        with open("login_error_page_source.html", "w", encoding="utf-8") as f:
+            f.write(browser.page_source)
         return False
 
 # プレイリスト作成とトラック追加
