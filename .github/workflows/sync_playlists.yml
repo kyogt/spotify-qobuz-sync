@@ -2,8 +2,7 @@ name: Sync Spotify Playlists to Qobuz
 
 on:
   schedule:
-    - cron: '0 9 * * 1'  # 毎週月曜日9:00に実行（Discover Weekly更新タイミング）
-    - cron: '0 9 * * 5'  # 毎週金曜日9:00に実行（Release Radar更新タイミング）
+    - cron: '0 12 * * 1'  # 毎週月曜日12:00に実行（統合プレイリスト更新後）
   workflow_dispatch:     # 手動実行もできるようにする
 
 jobs:
@@ -32,6 +31,5 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_AUTH_CACHE: ${{ secrets.SPOTIFY_AUTH_CACHE }}
           DISCOVER_WEEKLY_ID: ${{ secrets.DISCOVER_WEEKLY_ID }}
-          RELEASE_RADAR_ID: ${{ secrets.RELEASE_RADAR_ID }}
           QOBUZ_EMAIL: ${{ secrets.QOBUZ_EMAIL }}
           QOBUZ_PASSWORD: ${{ secrets.QOBUZ_PASSWORD }}
